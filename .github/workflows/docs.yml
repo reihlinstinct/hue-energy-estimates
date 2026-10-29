@@ -19,6 +19,8 @@ jobs:
         run: python3 -m unittest discover -s tests -v
 
   summary:
+    permissions:
+      contents: read
     name: Run summary
     if: always()
     needs: [docs]

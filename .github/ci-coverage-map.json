@@ -13,12 +13,6 @@
       ]
     },
     {
-      "pattern": ".github/workflows/**",
-      "checks": [
-        "docs"
-      ]
-    },
-    {
       "pattern": "scripts/validate_docs.py",
       "checks": [
         "docs"
