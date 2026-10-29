@@ -1,5 +1,7 @@
 # Hue energy estimates
 
+[![docs](https://github.com/reihlinstinct/hue-energy-estimates/actions/workflows/docs.yml/badge.svg)](https://github.com/reihlinstinct/hue-energy-estimates/actions/workflows/docs.yml)
+
 Design-stage tooling for observation-based Hue lighting energy estimates. Not a power meter. No live collection or account connection is enabled.
 
 Public files contain source and synthetic material only. Household data and credentials must never be committed.
