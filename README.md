@@ -11,6 +11,8 @@ Run `python3 scripts/validate_docs.py` and
 presence of design guardrails, not implementation correctness, privacy or a
 working Hue integration. No collection runs in CI and no secrets are required.
 
+Every workflow ends with a `Run summary` job that writes a summary to the top of the run page: which jobs ran, their result and duration, what was skipped and why, the commits and files the run changed, and which checks cover those changes (`.github/ci-coverage-map.json` declares the coverage; files matching no mapping are flagged). The script is `scripts/ci/run_summary.py`.
+
 ## License status
 
 No open-source license has been selected yet. Public visibility alone does not

@@ -1,0 +1,28 @@
+{
+  "mappings": [
+    {
+      "pattern": "docs/**",
+      "checks": [
+        "docs"
+      ]
+    },
+    {
+      "pattern": "scripts/**",
+      "checks": [
+        "docs"
+      ]
+    },
+    {
+      "pattern": "tests/**",
+      "checks": [
+        "docs"
+      ]
+    },
+    {
+      "pattern": ".github/workflows/**",
+      "checks": [
+        "docs"
+      ]
+    }
+  ]
+}
