@@ -8,6 +8,14 @@
    "evidence": "security-events: write",
    "issue": "https://github.com/reihlinstinct/hue-energy-estimates/issues/17",
    "reason": "Approved job-scoped SARIF upload to GitHub code scanning; no code or secrets write."
+  },
+  {
+   "path": ".github/workflows/docs.yml",
+   "rule": "job-write",
+   "scope": "alert",
+   "evidence": "issues: write",
+   "issue": "https://github.com/reihlinstinct/hue-energy-estimates/issues/25",
+   "reason": "Job-scoped issues:write lets the scheduled-failure alert open/update the single docs-validation-alert issue; runs only on schedule failure, no code or secrets access, no checkout."
   }
  ]
 }
