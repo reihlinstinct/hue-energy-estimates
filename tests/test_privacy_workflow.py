@@ -1,4 +1,5 @@
 """Offline regression checks for the committed privacy caller contract."""
+import json
 from pathlib import Path
 import unittest
 
@@ -36,3 +37,7 @@ class PrivacyWorkflowTests(unittest.TestCase):
         self.assertIn('python3 scripts/validate_docs.py', self.text)
         self.assertIn('python3 -m unittest discover -s tests -v', self.text)
         self.assertIn('permissions:\n  contents: read\n', self.text)
+
+    def test_coverage_map_declares_tracked_text_guard(self):
+        data = json.loads((WORKFLOW.parents[1] / 'ci-coverage-map.json').read_text(encoding='utf-8'))
+        self.assertIn({'pattern': '**', 'checks': ['privacy']}, data['mappings'])

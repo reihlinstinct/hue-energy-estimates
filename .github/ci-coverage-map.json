@@ -17,6 +17,12 @@
       "checks": [
         "docs"
       ]
+    },
+    {
+      "pattern": "**",
+      "checks": [
+        "privacy"
+      ]
     }
   ]
 }
