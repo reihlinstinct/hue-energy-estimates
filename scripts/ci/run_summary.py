@@ -14,9 +14,12 @@ never the job. The one stop condition is the startup self-test: a failure
 means the tool itself is defective, so the job fails loudly instead of
 writing a wrong summary. Nothing else in this step may fail the workflow.
 """
+import json
 import os
 import subprocess
 import sys
+import urllib.error
+import urllib.request  # noqa: F401 - compatibility: callers patch this module
 
 # The script's own directory holds the sibling modules it is split
 # into; put it on sys.path so direct runs and importlib file-location
@@ -32,7 +35,6 @@ from run_summary_changes import (
     changed_ranges,
     glob_to_regex,
     load_event,
-    load_map,
 )
 from run_summary_jobs import (
     _job_display_name,
@@ -42,6 +44,149 @@ from run_summary_jobs import (
     job_durations,
     load_job_meta,
 )
+
+# Section: Entry point
+
+def main():
+    try:
+        _self_test()
+    except AssertionError:
+        sys.exit("run_summary.py self-test failed; the summary tool is "
+                 "defective, not writing a summary")
+    env = os.environ
+    out = []
+    repo = env.get("GITHUB_REPOSITORY", "")
+    server = env.get("GITHUB_SERVER_URL", "")
+    sha = env.get("GITHUB_SHA", "")
+    workflow = env.get("GITHUB_WORKFLOW", "")
+
+    out.append(f"## Run summary - {workflow}\n")
+    out.append(f"- Event: `{env.get('GITHUB_EVENT_NAME', '')}`")
+    if repo and sha and server:
+        out.append(f"- Commit: [`{sha[:7]}`]({server}/{repo}/commit/{sha})")
+    elif sha:
+        out.append(f"- Commit: `{sha[:7]}`")
+
+    # --- Jobs -------------------------------------------------------------
+    needs = _parse_needs(env.get("NEEDS_JSON", "{}"))
+    durations = job_durations(env)
+    conditions, display_names = load_job_meta(env)
+    if needs:
+        out.append("\n### Jobs\n")
+        out.append("| Job | Result | Duration |")
+        out.append("| --- | --- | --- |")
+        counts = {}
+        total = 0.0
+        for job in sorted(needs):
+            result = needs[job].get("result", "unknown")
+            counts[result] = counts.get(result, 0) + 1
+            dur = duration_for(job, durations, display_names)
+            if dur is not None:
+                total += dur
+            out.append(f"| `{job}` | {result} | "
+                       f"{fmt_dur(dur) if dur is not None else 'n/a'} |")
+        out.append("")
+        out.append("Totals: "
+                   + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+                   + ".")
+        if total:
+            out.append(f"Summed job time: {fmt_dur(total)} (each job is "
+                       "billed rounded up to a whole minute; minutes on "
+                       "public repos are free).")
+        if not durations:
+            out.append("Per-job durations unavailable (jobs API not "
+                       "reachable with this token).")
+        skipped = [j for j in sorted(needs)
+                   if needs[j].get("result") == "skipped"]
+        if skipped:
+            out.append("\nSkipped jobs:")
+            for job in skipped:
+                cond = conditions.get(job)
+                out.append(f"- `{job}`" +
+                           (f" - runs only if {md_escape(cond)}"
+                            if cond else
+                            " - its condition was not met"))
+    else:
+        out.append("\nNo upstream jobs declared in `needs`.")
+
+    # --- What changed -----------------------------------------------------
+    event = load_event(env)
+    ranges = changed_ranges(env, event)
+    files = []
+    if ranges:
+        log_rng, diff_rng = ranges
+        out.append(f"\n### What changed in this run (`{diff_rng}`)\n")
+        try:
+            log = sh("git", "log", "--format=%h %s", log_rng).strip()
+            out.append("Commits:")
+            # _log_rows splits raw bytes on b"\n" only: neither
+            # universal-newlines decoding nor CR/U+2028/U+2029 in a
+            # subject can smuggle a forged extra row.
+            for short, subject in _log_rows(log):
+                out.append(f"- `{md_escape(short)}` {md_escape(subject)}")
+            # -z: NUL-delimited, no quoting of non-ASCII paths.
+            diff = sh("git", "diff", "--name-status", "-z", diff_rng)
+            records = [r.decode("utf-8", "replace")
+                       for r in diff.split(b"\x00") if r]
+            i = 0
+            while i < len(records):
+                status = records[i]
+                if status.startswith(("R", "C")):
+                    i += 1  # skip old path; report the new one
+                if i + 1 > len(records) - 1:
+                    break
+                files.append((status[0], records[i + 1]))
+                i += 2
+        except subprocess.CalledProcessError:
+            out.append("Diff unavailable in this checkout "
+                       "(shallow history or missing base).")
+    else:
+        out.append("\n### What changed in this run\n")
+        out.append(_no_range_reason(env, event))
+
+    # --- Coverage ---------------------------------------------------------
+    if files:
+        mappings = load_map()
+        out.append("\n### Coverage of the changes\n")
+        if not mappings:
+            out.append("Changed files (no coverage map in this repo; add "
+                       f"`{MAP_PATH}` to declare which checks cover what):")
+            for status, path in files:
+                word = STATUS_WORD.get(status, status)
+                out.append(f"- {md_escape(path)} ({word})")
+        else:
+            out.append("| File | Change | Checks covering it |")
+            out.append("| --- | --- | --- |")
+            uncovered = []
+            for status, path in files:
+                checks = []
+                for regex, _pattern, mapped in mappings:
+                    if regex.match(path):
+                        checks.extend(c for c in mapped if c not in checks)
+                word = STATUS_WORD.get(status, status)
+                if checks:
+                    out.append(f"| {md_escape(path)} | {word} | "
+                               + ", ".join(f"`{c}`" for c in checks) + " |")
+                else:
+                    out.append(f"| {md_escape(path)} | {word} | - |")
+                    uncovered.append(path)
+            if uncovered:
+                out.append("\nChanged without declared coverage (no "
+                           f"check in `{MAP_PATH}` maps to these files):")
+                for path in uncovered:
+                    out.append(f"- {md_escape(path)}")
+            else:
+                out.append("\nEvery changed file matches at least one "
+                           "coverage mapping.")
+
+    text = "\n".join(out) + "\n"
+    summary = env.get("GITHUB_STEP_SUMMARY", "")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as fh:
+            fh.write(text)
+    else:
+        sys.stdout.write(text)
+
 
 # Section: General helpers
 
@@ -208,147 +353,15 @@ def _self_test():
     assert conds == {"a": "always()"}
 
 
-# Section: Entry point
+# Section: Coverage map access
 
-def main():
+def load_map():
     try:
-        _self_test()
-    except AssertionError:
-        sys.exit("run_summary.py self-test failed; the summary tool is "
-                 "defective, not writing a summary")
-    env = os.environ
-    out = []
-    repo = env.get("GITHUB_REPOSITORY", "")
-    server = env.get("GITHUB_SERVER_URL", "")
-    sha = env.get("GITHUB_SHA", "")
-    workflow = env.get("GITHUB_WORKFLOW", "")
-
-    out.append(f"## Run summary - {workflow}\n")
-    out.append(f"- Event: `{env.get('GITHUB_EVENT_NAME', '')}`")
-    if repo and sha and server:
-        out.append(f"- Commit: [`{sha[:7]}`]({server}/{repo}/commit/{sha})")
-    elif sha:
-        out.append(f"- Commit: `{sha[:7]}`")
-
-    # --- Jobs -------------------------------------------------------------
-    needs = _parse_needs(env.get("NEEDS_JSON", "{}"))
-    durations = job_durations(env)
-    conditions, display_names = load_job_meta(env)
-    if needs:
-        out.append("\n### Jobs\n")
-        out.append("| Job | Result | Duration |")
-        out.append("| --- | --- | --- |")
-        counts = {}
-        total = 0.0
-        for job in sorted(needs):
-            result = needs[job].get("result", "unknown")
-            counts[result] = counts.get(result, 0) + 1
-            dur = duration_for(job, durations, display_names)
-            if dur is not None:
-                total += dur
-            out.append(f"| `{job}` | {result} | "
-                       f"{fmt_dur(dur) if dur is not None else 'n/a'} |")
-        out.append("")
-        out.append("Totals: "
-                   + ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
-                   + ".")
-        if total:
-            out.append(f"Summed job time: {fmt_dur(total)} (each job is "
-                       "billed rounded up to a whole minute; minutes on "
-                       "public repos are free).")
-        if not durations:
-            out.append("Per-job durations unavailable (jobs API not "
-                       "reachable with this token).")
-        skipped = [j for j in sorted(needs)
-                   if needs[j].get("result") == "skipped"]
-        if skipped:
-            out.append("\nSkipped jobs:")
-            for job in skipped:
-                cond = conditions.get(job)
-                out.append(f"- `{job}`" +
-                           (f" - runs only if {md_escape(cond)}"
-                            if cond else
-                            " - its condition was not met"))
-    else:
-        out.append("\nNo upstream jobs declared in `needs`.")
-
-    # --- What changed -----------------------------------------------------
-    event = load_event(env)
-    ranges = changed_ranges(env, event)
-    files = []
-    if ranges:
-        log_rng, diff_rng = ranges
-        out.append(f"\n### What changed in this run (`{diff_rng}`)\n")
-        try:
-            log = sh("git", "log", "--format=%h %s", log_rng).strip()
-            out.append("Commits:")
-            # _log_rows splits raw bytes on b"\n" only: neither
-            # universal-newlines decoding nor CR/U+2028/U+2029 in a
-            # subject can smuggle a forged extra row.
-            for short, subject in _log_rows(log):
-                out.append(f"- `{md_escape(short)}` {md_escape(subject)}")
-            # -z: NUL-delimited, no quoting of non-ASCII paths.
-            diff = sh("git", "diff", "--name-status", "-z", diff_rng)
-            records = [r.decode("utf-8", "replace")
-                       for r in diff.split(b"\x00") if r]
-            i = 0
-            while i < len(records):
-                status = records[i]
-                if status.startswith(("R", "C")):
-                    i += 1  # skip old path; report the new one
-                if i + 1 > len(records) - 1:
-                    break
-                files.append((status[0], records[i + 1]))
-                i += 2
-        except subprocess.CalledProcessError:
-            out.append("Diff unavailable in this checkout "
-                       "(shallow history or missing base).")
-    else:
-        out.append("\n### What changed in this run\n")
-        out.append(_no_range_reason(env, event))
-
-    # --- Coverage ---------------------------------------------------------
-    if files:
-        mappings = load_map()
-        out.append("\n### Coverage of the changes\n")
-        if not mappings:
-            out.append("Changed files (no coverage map in this repo; add "
-                       f"`{MAP_PATH}` to declare which checks cover what):")
-            for status, path in files:
-                word = STATUS_WORD.get(status, status)
-                out.append(f"- {md_escape(path)} ({word})")
-        else:
-            out.append("| File | Change | Checks covering it |")
-            out.append("| --- | --- | --- |")
-            uncovered = []
-            for status, path in files:
-                checks = []
-                for regex, _pattern, mapped in mappings:
-                    if regex.match(path):
-                        checks.extend(c for c in mapped if c not in checks)
-                word = STATUS_WORD.get(status, status)
-                if checks:
-                    out.append(f"| {md_escape(path)} | {word} | "
-                               + ", ".join(f"`{c}`" for c in checks) + " |")
-                else:
-                    out.append(f"| {md_escape(path)} | {word} | - |")
-                    uncovered.append(path)
-            if uncovered:
-                out.append("\nChanged without declared coverage (no "
-                           f"check in `{MAP_PATH}` maps to these files):")
-                for path in uncovered:
-                    out.append(f"- {md_escape(path)}")
-            else:
-                out.append("\nEvery changed file matches at least one "
-                           "coverage mapping.")
-
-    text = "\n".join(out) + "\n"
-    summary = env.get("GITHUB_STEP_SUMMARY", "")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as fh:
-            fh.write(text)
-    else:
-        sys.stdout.write(text)
+        with open(MAP_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return _map_entries(data)
 
 
 if __name__ == "__main__":

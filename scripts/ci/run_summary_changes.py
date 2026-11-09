@@ -116,13 +116,6 @@ def _map_entries(data):
     return mappings
 
 
-def load_map():
-    try:
-        with open(MAP_PATH, encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (OSError, json.JSONDecodeError):
-        return []
-    return _map_entries(data)
 
 
 STATUS_WORD = {"A": "added", "M": "modified", "D": "deleted",
