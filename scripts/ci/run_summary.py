@@ -18,6 +18,11 @@ import os
 import subprocess
 import sys
 
+# The script's own directory holds the sibling modules it is split
+# into; put it on sys.path so direct runs and importlib file-location
+# loads (unit tests) both resolve them.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from run_summary_changes import (
     MAP_PATH,
     STATUS_WORD,
