@@ -32,7 +32,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Bounded tracked-text privacy scan
-        uses: reihlinstinct/repo-checks/actions/privacy@c9a60fadeecab75bde9674e96b3d76a5e2fe6645
+        uses: reihlinstinct/repo-checks/actions/privacy@aee03b060c7b844b28e9767d8634b87f82cb4896
         with:
           checkout-root: ${{ github.workspace }}
 
