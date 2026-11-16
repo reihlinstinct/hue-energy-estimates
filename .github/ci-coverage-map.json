@@ -1,0 +1,28 @@
+{
+  "mappings": [
+    {
+      "pattern": "docs/**",
+      "checks": [
+        "docs"
+      ]
+    },
+    {
+      "pattern": "tests/**",
+      "checks": [
+        "docs"
+      ]
+    },
+    {
+      "pattern": "scripts/validate_docs.py",
+      "checks": [
+        "docs"
+      ]
+    },
+    {
+      "pattern": "**",
+      "checks": [
+        "privacy"
+      ]
+    }
+  ]
+}
